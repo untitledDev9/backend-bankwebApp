@@ -1,0 +1,49 @@
+import { Router } from 'express';
+import { body } from 'express-validator';
+import protect from '../middleware/protect';
+import * as ctrl from '../controllers/customerController';
+
+const router = Router();
+
+router.use(protect);
+
+router.get('/me', ctrl.getMe);
+router.get('/transactions', ctrl.getTransactions);
+router.post(
+  '/withdraw',
+  body('amount').isFloat({ gt: 0 }).withMessage('Amount must be a positive number'),
+  ctrl.withdraw
+);
+
+router.patch(
+  '/profile',
+  [
+    body('full_name').optional().trim().notEmpty().withMessage('Name cannot be empty'),
+    body('email').optional().isEmail().normalizeEmail().withMessage('Valid email required'),
+    body('phone').optional().trim(),
+  ],
+  ctrl.updateProfile
+);
+
+router.post(
+  '/change-password',
+  [
+    body('current_password').notEmpty().withMessage('Current password is required'),
+    body('new_password').isLength({ min: 8 }).withMessage('New password must be at least 8 characters'),
+  ],
+  ctrl.changePassword
+);
+
+router.post(
+  '/transfer',
+  [
+    body('account_number').trim().notEmpty().withMessage('Account number is required'),
+    body('amount').isFloat({ gt: 0 }).withMessage('Amount must be positive'),
+    body('description').optional().trim(),
+  ],
+  ctrl.transfer
+);
+
+router.get('/lookup-account/:account_number', ctrl.lookupAccount);
+
+export default router;

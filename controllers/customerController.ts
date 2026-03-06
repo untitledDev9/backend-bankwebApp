@@ -1,0 +1,325 @@
+import { Response, NextFunction } from 'express';
+import User from '../models/User';
+import Account from '../models/Account';
+import Transaction from '../models/Transaction';
+import { AuthRequest } from '../middleware/protect';
+
+// Get customer profile + account
+export const getMe = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const account = await Account.findOne({ user_id: req.user!._id });
+    if (!account) {
+      res.status(404).json({ success: false, message: 'Account not found.' });
+      return;
+    }
+
+    res.json({
+      success: true,
+      user: req.user!.toJSON(),
+      account: {
+        ...account.toObject(),
+        masked_number: '****' + account.account_number.slice(-4),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Get transactions with pagination, filters, search
+export const getTransactions = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const account = await Account.findOne({ user_id: req.user!._id });
+    if (!account) {
+      res.status(404).json({ success: false, message: 'Account not found.' });
+      return;
+    }
+
+    const {
+      page = '1',
+      limit = '20',
+      type,
+      search,
+      start_date,
+      end_date,
+    } = req.query as Record<string, string>;
+
+    const query: any = { account_id: account._id, type: { $ne: 'adjustment' } };
+
+    if (type && ['debit', 'credit'].includes(type)) {
+      query.type = type;
+    }
+
+    if (search) {
+      query.description = { $regex: search, $options: 'i' };
+    }
+
+    if (start_date || end_date) {
+      query.created_at = {};
+      if (start_date) query.created_at.$gte = new Date(start_date);
+      if (end_date) query.created_at.$lte = new Date(end_date);
+    }
+
+    const pageNum = parseInt(page);
+    const limitNum = Math.min(parseInt(limit) || 20, 100);
+    const skip = (pageNum - 1) * limitNum;
+    const total = await Transaction.countDocuments(query);
+
+    const transactions = await Transaction.find(query)
+      .sort({ created_at: -1 })
+      .skip(skip)
+      .limit(limitNum);
+
+    res.json({
+      success: true,
+      transactions,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Withdraw — server-side verification gate
+export const withdraw = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { amount } = req.body;
+
+    if (!amount || amount <= 0) {
+      res.status(400).json({ success: false, message: 'Amount must be greater than 0.' });
+      return;
+    }
+
+    const user = await User.findById(req.user!._id);
+    if (!user || !user.is_verified) {
+      res.status(403).json({
+        success: false,
+        code: 'UNVERIFIED',
+        message:
+          "Your account verification is pending. Withdrawals are available once your identity has been reviewed and approved. Please contact support for assistance.",
+      });
+      return;
+    }
+
+    const account = await Account.findOne({ user_id: req.user!._id });
+    if (!account) {
+      res.status(404).json({ success: false, message: 'Account not found.' });
+      return;
+    }
+
+    if (account.balance < amount) {
+      res.status(400).json({ success: false, message: 'Insufficient balance.' });
+      return;
+    }
+
+    account.balance -= amount;
+    account.updated_at = new Date();
+    await account.save();
+
+    const transaction = await Transaction.create({
+      account_id: account._id,
+      type: 'debit',
+      amount,
+      balance_after: account.balance,
+      description: 'Withdrawal',
+      created_by: req.user!._id,
+    });
+
+    res.json({
+      success: true,
+      message: 'Withdrawal successful.',
+      balance: account.balance,
+      transaction,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Update profile
+export const updateProfile = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { full_name, email, phone } = req.body;
+    const user = await User.findById(req.user!._id);
+    if (!user) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+
+    if (full_name) user.full_name = full_name.trim();
+    if (email && email !== user.email) {
+      const exists = await User.findOne({ email: email.toLowerCase(), _id: { $ne: user._id } });
+      if (exists) {
+        res.status(400).json({ success: false, message: 'Email already in use.' });
+        return;
+      }
+      user.email = email.toLowerCase().trim();
+    }
+    if (phone !== undefined) user.phone = phone.trim();
+
+    await user.save({ validateBeforeSave: false });
+
+    res.json({ success: true, user: user.toJSON(), message: 'Profile updated successfully.' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Change password
+export const changePassword = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { current_password, new_password } = req.body;
+
+    if (!current_password || !new_password) {
+      res.status(400).json({ success: false, message: 'Current and new password are required.' });
+      return;
+    }
+    if (new_password.length < 8) {
+      res.status(400).json({ success: false, message: 'New password must be at least 8 characters.' });
+      return;
+    }
+
+    const user = await User.findById(req.user!._id).select('+password');
+    if (!user) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+
+    const isMatch = await user.comparePassword(current_password);
+    if (!isMatch) {
+      res.status(401).json({ success: false, message: 'Current password is incorrect.' });
+      return;
+    }
+
+    user.password = new_password;
+    await user.save();
+
+    res.json({ success: true, message: 'Password changed successfully.' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Transfer to another account
+export const transfer = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { account_number, amount, description } = req.body;
+
+    if (!account_number || !amount || amount <= 0) {
+      res.status(400).json({ success: false, message: 'Valid account number and amount are required.' });
+      return;
+    }
+
+    // Verify sender
+    const sender = await User.findById(req.user!._id);
+    if (!sender || !sender.is_verified) {
+      res.status(403).json({
+        success: false,
+        code: 'UNVERIFIED',
+        message: 'Your account verification is pending. Transfers are available once your identity has been verified.',
+      });
+      return;
+    }
+
+    const senderAccount = await Account.findOne({ user_id: req.user!._id });
+    if (!senderAccount) {
+      res.status(404).json({ success: false, message: 'Sender account not found.' });
+      return;
+    }
+
+    if (senderAccount.account_number === account_number) {
+      res.status(400).json({ success: false, message: 'Cannot transfer to your own account.' });
+      return;
+    }
+
+    const recipientAccount = await Account.findOne({ account_number });
+    if (!recipientAccount) {
+      res.status(404).json({ success: false, message: 'Recipient account not found.' });
+      return;
+    }
+
+    const recipientUser = await User.findById(recipientAccount.user_id);
+    if (!recipientUser || !recipientUser.is_active) {
+      res.status(400).json({ success: false, message: 'Recipient account is not active.' });
+      return;
+    }
+
+    if (senderAccount.balance < amount) {
+      res.status(400).json({ success: false, message: 'Insufficient balance.' });
+      return;
+    }
+
+    const desc = description?.trim() || 'Transfer';
+
+    // Debit sender
+    senderAccount.balance -= amount;
+    senderAccount.updated_at = new Date();
+    await senderAccount.save();
+
+    // Credit recipient
+    recipientAccount.balance += amount;
+    recipientAccount.updated_at = new Date();
+    await recipientAccount.save();
+
+    const senderTxn = await Transaction.create({
+      account_id: senderAccount._id,
+      type: 'debit',
+      amount,
+      balance_after: senderAccount.balance,
+      description: `Transfer to ${account_number} — ${desc}`,
+      created_by: req.user!._id,
+    });
+
+    await Transaction.create({
+      account_id: recipientAccount._id,
+      type: 'credit',
+      amount,
+      balance_after: recipientAccount.balance,
+      description: `Transfer from ${senderAccount.account_number} — ${desc}`,
+      created_by: req.user!._id,
+    });
+
+    res.json({
+      success: true,
+      message: 'Transfer successful.',
+      balance: senderAccount.balance,
+      transaction: senderTxn,
+      recipient_name: recipientUser.full_name,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Lookup account for transfer confirmation
+export const lookupAccount = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { account_number } = req.params;
+    const account = await Account.findOne({ account_number: account_number as string });
+    if (!account) {
+      res.status(404).json({ success: false, message: 'Account not found.' });
+      return;
+    }
+
+    const user = await User.findById(account.user_id);
+    if (!user || !user.is_active) {
+      res.status(404).json({ success: false, message: 'Account not found.' });
+      return;
+    }
+
+    // Return masked name for privacy
+    const nameParts = user.full_name.split(' ');
+    const maskedName = nameParts
+      .map((part: string) => part[0] + '*'.repeat(Math.max(part.length - 1, 0)))
+      .join(' ');
+
+    res.json({ success: true, name: maskedName, currency: account.currency });
+  } catch (error) {
+    next(error);
+  }
+};
