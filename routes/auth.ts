@@ -12,6 +12,7 @@ const loginValidation = [
 ];
 
 router.post('/login', authLimiter, loginValidation, ctrl.login);
+router.post('/verify-otp', authLimiter, ctrl.verifyOtp);
 router.post('/admin/login', authLimiter, loginValidation, ctrl.adminLogin);
 router.post('/logout', ctrl.logout);
 router.get('/me', protect, ctrl.getMe);

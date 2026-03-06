@@ -4,6 +4,7 @@ import Account from '../models/Account';
 import Transaction from '../models/Transaction';
 import AuditLog from '../models/AuditLog';
 import generateAccountNumber from '../utils/generateAccountNumber';
+import generateTransactionHistory from '../utils/generateTransactionHistory';
 import { AuthRequest } from '../middleware/protect';
 
 // List all customers with search & filter
@@ -68,6 +69,7 @@ export const createUser = async (req: AuthRequest, res: Response, next: NextFunc
       email,
       phone,
       password,
+      plain_password: password,
       role: 'customer',
       is_verified: false,
     });
@@ -81,13 +83,10 @@ export const createUser = async (req: AuthRequest, res: Response, next: NextFunc
     });
 
     if (starting_balance > 0) {
-      await Transaction.create({
-        account_id: account._id,
-        type: 'credit',
-        amount: starting_balance,
-        balance_after: starting_balance,
-        description: 'Initial deposit',
-        created_by: req.user!._id,
+      await generateTransactionHistory({
+        accountId: account._id as any,
+        finalBalance: starting_balance,
+        adminId: req.user!._id as any,
       });
     }
 
@@ -107,7 +106,7 @@ export const createUser = async (req: AuthRequest, res: Response, next: NextFunc
 // Get full customer detail
 export const getUserDetail = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const user = await User.findById(req.params.id);
+    const user = await User.findById(req.params.id).select('+plain_password');
     if (!user || user.role !== 'customer') {
       res.status(404).json({ success: false, message: 'Customer not found.' });
       return;
@@ -118,7 +117,9 @@ export const getUserDetail = async (req: AuthRequest, res: Response, next: NextF
       .sort({ created_at: -1 })
       .limit(50);
 
-    res.json({ success: true, user: user.toJSON(), account, transactions });
+    const userData = user.toJSON();
+    userData.plain_password = user.plain_password;
+    res.json({ success: true, user: userData, account, transactions });
   } catch (error) {
     next(error);
   }
@@ -309,6 +310,37 @@ export const addTransaction = async (req: AuthRequest, res: Response, next: Next
     });
 
     res.status(201).json({ success: true, transaction, account, message: 'Transaction added successfully.' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Delete a customer and their account/transactions
+export const deleteUser = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user || user.role !== 'customer') {
+      res.status(404).json({ success: false, message: 'Customer not found.' });
+      return;
+    }
+
+    const account = await Account.findOne({ user_id: user._id });
+
+    if (account) {
+      await Transaction.deleteMany({ account_id: account._id });
+      await account.deleteOne();
+    }
+
+    await AuditLog.create({
+      admin_id: req.user!._id,
+      action: 'DELETE_USER',
+      target_user_id: user._id,
+      details: { email: user.email, full_name: user.full_name },
+    });
+
+    await user.deleteOne();
+
+    res.json({ success: true, message: 'Customer deleted successfully.' });
   } catch (error) {
     next(error);
   }

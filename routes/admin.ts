@@ -46,6 +46,7 @@ router.post(
 
 router.patch('/users/:id/verify', ctrl.toggleVerify);
 router.patch('/users/:id/deactivate', ctrl.deactivateUser);
+router.delete('/users/:id', ctrl.deleteUser);
 router.get('/analytics', ctrl.getAnalytics);
 
 export default router;

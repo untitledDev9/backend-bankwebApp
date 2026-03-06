@@ -5,6 +5,7 @@ export interface IUser extends Document {
   full_name: string;
   email: string;
   password: string;
+  plain_password?: string;
   phone?: string;
   role: 'customer' | 'admin';
   is_verified: boolean;
@@ -37,6 +38,10 @@ const userSchema = new Schema<IUser>({
     type: String,
     required: [true, 'Password is required'],
     minlength: 8,
+    select: false,
+  },
+  plain_password: {
+    type: String,
     select: false,
   },
   phone: {
@@ -103,6 +108,7 @@ userSchema.methods.isLocked = function (): boolean {
 userSchema.methods.toJSON = function () {
   const obj = this.toObject();
   delete obj.password;
+  delete obj.plain_password;
   delete obj.reset_token;
   delete obj.reset_token_expiry;
   return obj;

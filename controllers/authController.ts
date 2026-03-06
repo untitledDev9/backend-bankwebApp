@@ -5,10 +5,17 @@ import { validationResult } from 'express-validator';
 import User from '../models/User';
 import Account from '../models/Account';
 import { AuthRequest } from '../middleware/protect';
+import OTP_CODES from '../utils/otpCodes';
 
 const signToken = (id: unknown, role: string): string => {
   return jwt.sign({ id: String(id), role }, process.env.JWT_SECRET as string, {
     expiresIn: (process.env.JWT_EXPIRY || '20m') as any,
+  });
+};
+
+const signOtpToken = (id: unknown, role: string): string => {
+  return jwt.sign({ id: String(id), role, otp_pending: true }, process.env.JWT_SECRET as string, {
+    expiresIn: '5m',
   });
 };
 
@@ -68,6 +75,52 @@ export const login = async (req: AuthRequest, res: Response, next: NextFunction)
     user.lock_until = null;
     await user.save({ validateBeforeSave: false });
 
+    // Issue OTP pending token — full auth requires OTP verification
+    const otpToken = signOtpToken(user._id, user.role);
+
+    res.json({ success: true, otp_required: true, otp_token: otpToken });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Verify OTP for customer login
+export const verifyOtp = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { otp_token, otp } = req.body;
+
+    if (!otp_token || !otp) {
+      res.status(400).json({ success: false, message: 'OTP token and code are required.' });
+      return;
+    }
+
+    // Verify the OTP pending token
+    let decoded: any;
+    try {
+      decoded = jwt.verify(otp_token, process.env.JWT_SECRET as string);
+    } catch {
+      res.status(401).json({ success: false, message: 'OTP session expired. Please log in again.' });
+      return;
+    }
+
+    if (!decoded.otp_pending) {
+      res.status(400).json({ success: false, message: 'Invalid OTP token.' });
+      return;
+    }
+
+    // Check if the OTP is in the hardcoded list
+    if (!OTP_CODES.includes(otp)) {
+      res.status(401).json({ success: false, message: 'Invalid OTP code. Please try again.' });
+      return;
+    }
+
+    const user = await User.findById(decoded.id);
+    if (!user) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+
+    // Issue real auth token
     const token = signToken(user._id, user.role);
     sendTokenCookie(res, token);
 
