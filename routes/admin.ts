@@ -33,6 +33,17 @@ router.patch(
   ctrl.updateBalance
 );
 
+router.post(
+  '/users/:id/transactions',
+  [
+    body('type').isIn(['credit', 'debit']).withMessage('Type must be credit or debit'),
+    body('amount').isFloat({ gt: 0 }).withMessage('Amount must be greater than 0'),
+    body('description').optional().trim(),
+    body('date').optional().isISO8601(),
+  ],
+  ctrl.addTransaction
+);
+
 router.patch('/users/:id/verify', ctrl.toggleVerify);
 router.patch('/users/:id/deactivate', ctrl.deactivateUser);
 router.get('/analytics', ctrl.getAnalytics);

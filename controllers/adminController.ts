@@ -254,6 +254,66 @@ export const getAnalytics = async (req: AuthRequest, res: Response, next: NextFu
   }
 };
 
+// Add transaction to a customer's account
+export const addTransaction = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { type, amount, description, date } = req.body;
+
+    if (!['credit', 'debit'].includes(type)) {
+      res.status(400).json({ success: false, message: 'Type must be credit or debit.' });
+      return;
+    }
+    if (!amount || amount <= 0) {
+      res.status(400).json({ success: false, message: 'Amount must be greater than 0.' });
+      return;
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user || user.role !== 'customer') {
+      res.status(404).json({ success: false, message: 'Customer not found.' });
+      return;
+    }
+
+    const account = await Account.findOne({ user_id: user._id });
+    if (!account) {
+      res.status(404).json({ success: false, message: 'Account not found.' });
+      return;
+    }
+
+    if (type === 'debit' && account.balance < amount) {
+      res.status(400).json({ success: false, message: 'Insufficient balance for this debit.' });
+      return;
+    }
+
+    const newBalance = type === 'credit' ? account.balance + amount : account.balance - amount;
+
+    account.balance = newBalance;
+    account.updated_at = new Date();
+    await account.save();
+
+    const transaction = await Transaction.create({
+      account_id: account._id,
+      type,
+      amount,
+      balance_after: newBalance,
+      description: description || (type === 'credit' ? 'Credit' : 'Debit'),
+      created_at: date ? new Date(date) : new Date(),
+      created_by: req.user!._id,
+    });
+
+    await AuditLog.create({
+      admin_id: req.user!._id,
+      action: 'ADD_TRANSACTION',
+      target_user_id: user._id,
+      details: { type, amount, description, balance_after: newBalance },
+    });
+
+    res.status(201).json({ success: true, transaction, account, message: 'Transaction added successfully.' });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // Deactivate/activate account
 export const deactivateUser = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
