@@ -7,141 +7,99 @@ interface GenerateOptions {
   adminId: mongoose.Types.ObjectId;
 }
 
-const creditDescriptions = [
-  'Salary deposit',
-  'Wire transfer received',
-  'Direct deposit',
-  'Refund processed',
-  'Freelance payment',
-  'Interest earned',
-  'Bonus payment',
-  'Cash deposit',
-  'Transfer from savings',
-  'Commission payment',
-];
-
-const debitDescriptions = [
-  'Grocery purchase',
-  'Electric bill payment',
-  'Internet subscription',
-  'Restaurant payment',
-  'ATM withdrawal',
-  'Online shopping',
-  'Phone bill',
-  'Gas station',
-  'Insurance premium',
-  'Rent payment',
-  'Water bill',
-  'Streaming subscription',
-  'Gym membership',
-  'Transportation',
-  'Medical payment',
-];
-
-function pick<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-function randBetween(min: number, max: number): number {
-  return Math.round((Math.random() * (max - min) + min) * 100) / 100;
-}
+// Fixed seed transactions that all users share — amounts are percentages of finalBalance
+const seedTransactions = [
+  { type: 'credit', pct: 0.35, description: 'Salary deposit', dayOffset: -340 },
+  { type: 'debit', pct: 0.02, description: 'Electric bill payment', dayOffset: -335 },
+  { type: 'debit', pct: 0.015, description: 'Internet subscription', dayOffset: -330 },
+  { type: 'credit', pct: 0.12, description: 'Freelance payment', dayOffset: -310 },
+  { type: 'debit', pct: 0.04, description: 'Grocery purchase', dayOffset: -305 },
+  { type: 'debit', pct: 0.03, description: 'Restaurant payment', dayOffset: -298 },
+  { type: 'credit', pct: 0.35, description: 'Salary deposit', dayOffset: -280 },
+  { type: 'debit', pct: 0.05, description: 'Online shopping', dayOffset: -275 },
+  { type: 'debit', pct: 0.01, description: 'Streaming subscription', dayOffset: -270 },
+  { type: 'debit', pct: 0.025, description: 'Gas station', dayOffset: -265 },
+  { type: 'credit', pct: 0.08, description: 'Wire transfer received', dayOffset: -250 },
+  { type: 'debit', pct: 0.06, description: 'Insurance premium', dayOffset: -245 },
+  { type: 'debit', pct: 0.015, description: 'Phone bill', dayOffset: -238 },
+  { type: 'credit', pct: 0.35, description: 'Salary deposit', dayOffset: -220 },
+  { type: 'debit', pct: 0.1, description: 'Rent payment', dayOffset: -215 },
+  { type: 'debit', pct: 0.04, description: 'Grocery purchase', dayOffset: -208 },
+  { type: 'credit', pct: 0.05, description: 'Refund processed', dayOffset: -200 },
+  { type: 'debit', pct: 0.02, description: 'Water bill', dayOffset: -195 },
+  { type: 'debit', pct: 0.01, description: 'Gym membership', dayOffset: -190 },
+  { type: 'credit', pct: 0.35, description: 'Salary deposit', dayOffset: -170 },
+  { type: 'debit', pct: 0.03, description: 'Transportation', dayOffset: -165 },
+  { type: 'debit', pct: 0.045, description: 'Medical payment', dayOffset: -158 },
+  { type: 'credit', pct: 0.1, description: 'Commission payment', dayOffset: -145 },
+  { type: 'debit', pct: 0.035, description: 'Online shopping', dayOffset: -140 },
+  { type: 'debit', pct: 0.02, description: 'Electric bill payment', dayOffset: -132 },
+  { type: 'credit', pct: 0.35, description: 'Salary deposit', dayOffset: -115 },
+  { type: 'debit', pct: 0.04, description: 'Grocery purchase', dayOffset: -110 },
+  { type: 'debit', pct: 0.015, description: 'Internet subscription', dayOffset: -105 },
+  { type: 'credit', pct: 0.06, description: 'Interest earned', dayOffset: -95 },
+  { type: 'debit', pct: 0.025, description: 'Restaurant payment', dayOffset: -88 },
+  { type: 'credit', pct: 0.35, description: 'Salary deposit', dayOffset: -75 },
+  { type: 'debit', pct: 0.1, description: 'Rent payment', dayOffset: -70 },
+  { type: 'debit', pct: 0.05, description: 'Online shopping', dayOffset: -62 },
+  { type: 'credit', pct: 0.07, description: 'Cash deposit', dayOffset: -50 },
+  { type: 'debit', pct: 0.015, description: 'Phone bill', dayOffset: -45 },
+  { type: 'debit', pct: 0.03, description: 'Gas station', dayOffset: -38 },
+  { type: 'credit', pct: 0.35, description: 'Salary deposit', dayOffset: -25 },
+  { type: 'debit', pct: 0.04, description: 'Grocery purchase', dayOffset: -20 },
+  { type: 'debit', pct: 0.02, description: 'Water bill', dayOffset: -15 },
+  { type: 'credit', pct: 0.09, description: 'Transfer from savings', dayOffset: -10 },
+  { type: 'debit', pct: 0.035, description: 'Insurance premium', dayOffset: -5 },
+  { type: 'debit', pct: 0.01, description: 'Streaming subscription', dayOffset: -2 },
+] as const;
 
 export default async function generateTransactionHistory({ accountId, finalBalance, adminId }: GenerateOptions): Promise<void> {
   if (finalBalance <= 0) return;
 
   const now = new Date();
-  const oneYearAgo = new Date(now);
-  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+  const MS_PER_DAY = 86400000;
 
-  // Generate between 40-80 transactions spread over the year
-  const txnCount = Math.floor(Math.random() * 41) + 40;
-
-  // Generate random dates sorted oldest first
-  const dates: Date[] = [];
-  for (let i = 0; i < txnCount; i++) {
-    const ts = oneYearAgo.getTime() + Math.random() * (now.getTime() - oneYearAgo.getTime());
-    dates.push(new Date(ts));
+  // First pass: compute what the raw final balance would be from seed percentages
+  let rawBalance = 0;
+  for (const txn of seedTransactions) {
+    const amount = Math.round(finalBalance * txn.pct * 100) / 100;
+    rawBalance = txn.type === 'credit'
+      ? Math.round((rawBalance + amount) * 100) / 100
+      : Math.round((rawBalance - amount) * 100) / 100;
   }
-  dates.sort((a, b) => a.getTime() - b.getTime());
 
-  // Build transactions forward, keeping balance always >= 0
-  // Start with a generous initial deposit, then simulate activity
-  const initialDeposit = Math.round(randBetween(finalBalance * 0.5, finalBalance * 2) * 100) / 100;
+  // Initial deposit sized so the seed transactions land on finalBalance
+  const initialDeposit = Math.round((finalBalance - rawBalance) * 100) / 100;
 
   const transactions: any[] = [];
   let balance = initialDeposit;
 
-  // First: initial deposit (1 day before first transaction)
-  const firstDate = new Date(dates[0]);
-  firstDate.setTime(firstDate.getTime() - 86400000);
-
+  // Initial deposit
+  const firstDayOffset = seedTransactions[0].dayOffset;
   transactions.push({
     account_id: accountId,
     type: 'credit',
     amount: initialDeposit,
     balance_after: initialDeposit,
     description: 'Initial deposit',
-    created_at: firstDate,
+    created_at: new Date(now.getTime() + (firstDayOffset - 5) * MS_PER_DAY),
     created_by: adminId,
   });
 
-  // Generate credit/debit transactions
-  for (let i = 0; i < txnCount; i++) {
-    const isCredit = Math.random() < 0.45;
+  // Seed transactions
+  for (const txn of seedTransactions) {
+    const amount = Math.round(finalBalance * txn.pct * 100) / 100;
+    balance = txn.type === 'credit'
+      ? Math.round((balance + amount) * 100) / 100
+      : Math.round((balance - amount) * 100) / 100;
 
-    if (isCredit) {
-      const amount = randBetween(50, finalBalance * 0.25);
-      balance = Math.round((balance + amount) * 100) / 100;
-      transactions.push({
-        account_id: accountId,
-        type: 'credit',
-        amount,
-        balance_after: balance,
-        description: pick(creditDescriptions),
-        created_at: dates[i],
-        created_by: adminId,
-      });
-    } else {
-      const maxDebit = Math.min(balance * 0.4, finalBalance * 0.15);
-      if (maxDebit < 5) {
-        // Balance too low to debit, do a small credit instead
-        const amount = randBetween(50, finalBalance * 0.15);
-        balance = Math.round((balance + amount) * 100) / 100;
-        transactions.push({
-          account_id: accountId,
-          type: 'credit',
-          amount,
-          balance_after: balance,
-          description: pick(creditDescriptions),
-          created_at: dates[i],
-          created_by: adminId,
-        });
-      } else {
-        const amount = randBetween(5, maxDebit);
-        balance = Math.round((balance - amount) * 100) / 100;
-        transactions.push({
-          account_id: accountId,
-          type: 'debit',
-          amount,
-          balance_after: balance,
-          description: pick(debitDescriptions),
-          created_at: dates[i],
-          created_by: adminId,
-        });
-      }
-    }
-  }
-
-  // Final adjustment to land exactly on finalBalance
-  const diff = Math.round((finalBalance - balance) * 100) / 100;
-  if (Math.abs(diff) > 0.01) {
     transactions.push({
       account_id: accountId,
-      type: diff > 0 ? 'credit' : 'debit',
-      amount: Math.abs(diff),
-      balance_after: finalBalance,
-      description: diff > 0 ? 'Transfer received' : 'Service fee',
-      created_at: new Date(now.getTime() - 3600000),
+      type: txn.type,
+      amount,
+      balance_after: balance,
+      description: txn.description,
+      created_at: new Date(now.getTime() + txn.dayOffset * MS_PER_DAY),
       created_by: adminId,
     });
   }
