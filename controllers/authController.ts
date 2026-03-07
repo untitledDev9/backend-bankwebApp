@@ -26,6 +26,7 @@ const sendTokenCookie = (res: Response, token: string): void => {
     secure: isProduction,
     sameSite: isProduction ? 'none' : 'strict',
     maxAge: 20 * 60 * 1000,
+    ...(isProduction && { partitioned: true }),
   });
 };
 
@@ -175,6 +176,7 @@ export const logout = (req: AuthRequest, res: Response): void => {
     secure: isProduction,
     sameSite: isProduction ? 'none' : 'strict',
     expires: new Date(0),
+    ...(isProduction && { partitioned: true }),
   });
   res.json({ success: true, message: 'Logged out successfully.' });
 };
