@@ -19,17 +19,6 @@ const signOtpToken = (id: unknown, role: string): string => {
   });
 };
 
-const sendTokenCookie = (res: Response, token: string): void => {
-  const isProduction = process.env.NODE_ENV === 'production';
-  res.cookie('token', token, {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'none' : 'strict',
-    maxAge: 20 * 60 * 1000,
-    ...(isProduction && { partitioned: true }),
-  });
-};
-
 // Customer login
 export const login = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -123,9 +112,8 @@ export const verifyOtp = async (req: AuthRequest, res: Response, next: NextFunct
 
     // Issue real auth token
     const token = signToken(user._id, user.role);
-    sendTokenCookie(res, token);
 
-    res.json({ success: true, user: user.toJSON() });
+    res.json({ success: true, token, user: user.toJSON() });
   } catch (error) {
     next(error);
   }
@@ -160,9 +148,8 @@ export const adminLogin = async (req: AuthRequest, res: Response, next: NextFunc
     }
 
     const token = signToken(user._id, user.role);
-    sendTokenCookie(res, token);
 
-    res.json({ success: true, user: user.toJSON() });
+    res.json({ success: true, token, user: user.toJSON() });
   } catch (error) {
     next(error);
   }
@@ -170,14 +157,6 @@ export const adminLogin = async (req: AuthRequest, res: Response, next: NextFunc
 
 // Logout
 export const logout = (req: AuthRequest, res: Response): void => {
-  const isProduction = process.env.NODE_ENV === 'production';
-  res.cookie('token', '', {
-    httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'none' : 'strict',
-    expires: new Date(0),
-    ...(isProduction && { partitioned: true }),
-  });
   res.json({ success: true, message: 'Logged out successfully.' });
 };
 

@@ -1,5 +1,4 @@
 import express from 'express';
-import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
@@ -37,7 +36,6 @@ app.use(
   })
 );
 app.use(express.json());
-app.use(cookieParser());
 
 // Routes
 app.use('/api/auth', authRoutes);

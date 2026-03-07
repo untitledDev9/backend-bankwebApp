@@ -8,7 +8,8 @@ export interface AuthRequest extends Request {
 
 const protect = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const token = req.cookies.token;
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
 
     if (!token) {
       res.status(401).json({ success: false, message: 'Not authorized. Please log in.' });
