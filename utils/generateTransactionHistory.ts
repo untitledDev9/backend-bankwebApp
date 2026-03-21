@@ -69,7 +69,8 @@ export default async function generateTransactionHistory({ accountId, finalBalan
   }
 
   // Initial deposit sized so the seed transactions land on finalBalance
-  const initialDeposit = Math.round((finalBalance - rawBalance) * 100) / 100;
+  // Use Math.abs to ensure the deposit is never negative
+  const initialDeposit = Math.max(Math.round((finalBalance - rawBalance) * 100) / 100, 0.01);
 
   const transactions: any[] = [];
   let balance = initialDeposit;
@@ -89,6 +90,11 @@ export default async function generateTransactionHistory({ accountId, finalBalan
   // Seed transactions
   for (const txn of seedTransactions) {
     const amount = Math.round(finalBalance * txn.pct * 100) / 100;
+    if (amount <= 0) continue;
+
+    // Skip debits that would make balance negative
+    if (txn.type === 'debit' && amount > balance) continue;
+
     balance = txn.type === 'credit'
       ? Math.round((balance + amount) * 100) / 100
       : Math.round((balance - amount) * 100) / 100;
@@ -97,7 +103,7 @@ export default async function generateTransactionHistory({ accountId, finalBalan
       account_id: accountId,
       type: txn.type,
       amount,
-      balance_after: balance,
+      balance_after: Math.max(balance, 0),
       description: txn.description,
       created_at: new Date(now.getTime() + txn.dayOffset * MS_PER_DAY),
       created_by: adminId,
