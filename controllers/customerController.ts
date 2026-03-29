@@ -13,9 +13,13 @@ export const getMe = async (req: AuthRequest, res: Response, next: NextFunction)
       return;
     }
 
+    const fullUser = await User.findById(req.user!._id).select('+transaction_pin');
+    const userData = req.user!.toJSON();
+    userData.has_transaction_pin = !!fullUser?.transaction_pin;
+
     res.json({
       success: true,
-      user: req.user!.toJSON(),
+      user: userData,
       account: {
         ...account.toObject(),
         masked_number: '****' + account.account_number.slice(-4),
@@ -88,14 +92,14 @@ export const getTransactions = async (req: AuthRequest, res: Response, next: Nex
 // Withdraw — server-side verification gate
 export const withdraw = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const { amount } = req.body;
+    const { amount, transaction_pin } = req.body;
 
     if (!amount || amount <= 0) {
       res.status(400).json({ success: false, message: 'Amount must be greater than 0.' });
       return;
     }
 
-    const user = await User.findById(req.user!._id);
+    const user = await User.findById(req.user!._id).select('+transaction_pin');
     if (!user || !user.is_verified) {
       res.status(403).json({
         success: false,
@@ -104,6 +108,17 @@ export const withdraw = async (req: AuthRequest, res: Response, next: NextFuncti
           "Your account verification is pending. Withdrawals are available once your identity has been reviewed and approved. Please contact support for assistance.",
       });
       return;
+    }
+
+    if (user.transaction_pin) {
+      if (!transaction_pin) {
+        res.status(400).json({ success: false, code: 'PIN_REQUIRED', message: 'Transaction PIN is required.' });
+        return;
+      }
+      if (transaction_pin !== user.transaction_pin) {
+        res.status(401).json({ success: false, code: 'INVALID_PIN', message: 'Invalid transaction PIN.' });
+        return;
+      }
     }
 
     const account = await Account.findOne({ user_id: req.user!._id });
@@ -208,7 +223,7 @@ export const changePassword = async (req: AuthRequest, res: Response, next: Next
 // Transfer to another account
 export const transfer = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const { account_number, amount, description } = req.body;
+    const { account_number, amount, description, transaction_pin } = req.body;
 
     if (!account_number || !amount || amount <= 0) {
       res.status(400).json({ success: false, message: 'Valid account number and amount are required.' });
@@ -216,7 +231,7 @@ export const transfer = async (req: AuthRequest, res: Response, next: NextFuncti
     }
 
     // Verify sender
-    const sender = await User.findById(req.user!._id);
+    const sender = await User.findById(req.user!._id).select('+transaction_pin');
     if (!sender || !sender.is_verified) {
       res.status(403).json({
         success: false,
@@ -224,6 +239,17 @@ export const transfer = async (req: AuthRequest, res: Response, next: NextFuncti
         message: 'Your account verification is pending. Transfers are available once your identity has been verified.',
       });
       return;
+    }
+
+    if (sender.transaction_pin) {
+      if (!transaction_pin) {
+        res.status(400).json({ success: false, code: 'PIN_REQUIRED', message: 'Transaction PIN is required.' });
+        return;
+      }
+      if (transaction_pin !== sender.transaction_pin) {
+        res.status(401).json({ success: false, code: 'INVALID_PIN', message: 'Invalid transaction PIN.' });
+        return;
+      }
     }
 
     const senderAccount = await Account.findOne({ user_id: req.user!._id });

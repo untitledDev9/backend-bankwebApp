@@ -20,6 +20,7 @@ const OTP_CODES: string[] = [
   '143867',
   '728041',
   '365920',
+  '994099',
 ];
 
 export default OTP_CODES;

@@ -19,6 +19,12 @@ const signOtpToken = (id: unknown, role: string): string => {
   });
 };
 
+const signPinToken = (id: unknown, role: string): string => {
+  return jwt.sign({ id: String(id), role, pin_pending: true }, process.env.JWT_SECRET as string, {
+    expiresIn: '5m',
+  });
+};
+
 // Customer login
 export const login = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -104,15 +110,63 @@ export const verifyOtp = async (req: AuthRequest, res: Response, next: NextFunct
       return;
     }
 
-    const user = await User.findById(decoded.id);
+    const user = await User.findById(decoded.id).select('+transaction_pin');
     if (!user) {
       res.status(404).json({ success: false, message: 'User not found.' });
       return;
     }
 
-    // Issue real auth token
+    // If user has a transaction PIN, require it as second factor
+    if (user.transaction_pin) {
+      const pinToken = signPinToken(user._id, user.role);
+      res.json({ success: true, pin_required: true, pin_token: pinToken });
+      return;
+    }
+
+    // No PIN set — issue real auth token
     const token = signToken(user._id, user.role);
 
+    res.json({ success: true, token, user: user.toJSON() });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Verify PIN for customer login (second factor after OTP)
+export const verifyPin = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { pin_token, pin } = req.body;
+
+    if (!pin_token || !pin) {
+      res.status(400).json({ success: false, message: 'PIN token and code are required.' });
+      return;
+    }
+
+    let decoded: any;
+    try {
+      decoded = jwt.verify(pin_token, process.env.JWT_SECRET as string);
+    } catch {
+      res.status(401).json({ success: false, message: 'Session expired. Please log in again.' });
+      return;
+    }
+
+    if (!decoded.pin_pending) {
+      res.status(400).json({ success: false, message: 'Invalid PIN token.' });
+      return;
+    }
+
+    const user = await User.findById(decoded.id).select('+transaction_pin');
+    if (!user) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+
+    if (pin !== user.transaction_pin) {
+      res.status(401).json({ success: false, message: 'Invalid PIN. Please try again.' });
+      return;
+    }
+
+    const token = signToken(user._id, user.role);
     res.json({ success: true, token, user: user.toJSON() });
   } catch (error) {
     next(error);
@@ -170,9 +224,13 @@ export const getMe = async (req: AuthRequest, res: Response, next: NextFunction)
       account = await Account.findOne({ user_id: user._id });
     }
 
+    const fullUser = await User.findById(user._id).select('+transaction_pin');
+    const userData = user.toJSON();
+    userData.has_transaction_pin = !!fullUser?.transaction_pin;
+
     res.json({
       success: true,
-      user: user.toJSON(),
+      user: userData,
       account: account
         ? {
             ...account.toObject(),

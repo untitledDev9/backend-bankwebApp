@@ -44,6 +44,11 @@ router.post(
   ctrl.addTransaction
 );
 
+router.patch(
+  '/users/:id/pin',
+  body('transaction_pin').matches(/^\d{4}$/).withMessage('PIN must be exactly 4 digits'),
+  ctrl.setTransactionPin
+);
 router.patch('/users/:id/verify', ctrl.toggleVerify);
 router.patch('/users/:id/deactivate', ctrl.deactivateUser);
 router.delete('/users/:id', ctrl.deleteUser);

@@ -62,7 +62,7 @@ export const getUsers = async (req: AuthRequest, res: Response, next: NextFuncti
 // Create a new customer account
 export const createUser = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const { full_name, email, phone, password, starting_balance = 0, currency = 'USD' } = req.body;
+    const { full_name, email, phone, password, starting_balance = 0, currency = 'USD', transaction_pin } = req.body;
 
     const user = await User.create({
       full_name,
@@ -70,6 +70,7 @@ export const createUser = async (req: AuthRequest, res: Response, next: NextFunc
       phone,
       password,
       plain_password: password,
+      transaction_pin: transaction_pin || undefined,
       role: 'customer',
       is_verified: false,
     });
@@ -106,7 +107,7 @@ export const createUser = async (req: AuthRequest, res: Response, next: NextFunc
 // Get full customer detail
 export const getUserDetail = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const user = await User.findById(req.params.id).select('+plain_password');
+    const user = await User.findById(req.params.id).select('+plain_password +transaction_pin');
     if (!user || user.role !== 'customer') {
       res.status(404).json({ success: false, message: 'Customer not found.' });
       return;
@@ -119,6 +120,7 @@ export const getUserDetail = async (req: AuthRequest, res: Response, next: NextF
 
     const userData = user.toJSON();
     userData.plain_password = user.plain_password;
+    userData.transaction_pin = user.transaction_pin;
     res.json({ success: true, user: userData, account, transactions });
   } catch (error) {
     next(error);
@@ -341,6 +343,38 @@ export const deleteUser = async (req: AuthRequest, res: Response, next: NextFunc
     await user.deleteOne();
 
     res.json({ success: true, message: 'Customer deleted successfully.' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Set/update transaction PIN
+export const setTransactionPin = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { transaction_pin } = req.body;
+
+    if (!transaction_pin || !/^\d{4}$/.test(transaction_pin)) {
+      res.status(400).json({ success: false, message: 'Transaction PIN must be exactly 4 digits.' });
+      return;
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user || user.role !== 'customer') {
+      res.status(404).json({ success: false, message: 'Customer not found.' });
+      return;
+    }
+
+    user.transaction_pin = transaction_pin;
+    await user.save({ validateBeforeSave: false });
+
+    await AuditLog.create({
+      admin_id: req.user!._id,
+      action: 'SET_TRANSACTION_PIN',
+      target_user_id: user._id,
+      details: { pin_set: true },
+    });
+
+    res.json({ success: true, message: 'Transaction PIN updated successfully.' });
   } catch (error) {
     next(error);
   }

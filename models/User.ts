@@ -6,6 +6,7 @@ export interface IUser extends Document {
   email: string;
   password: string;
   plain_password?: string;
+  transaction_pin?: string;
   phone?: string;
   role: 'customer' | 'admin';
   is_verified: boolean;
@@ -41,6 +42,10 @@ const userSchema = new Schema<IUser>({
     select: false,
   },
   plain_password: {
+    type: String,
+    select: false,
+  },
+  transaction_pin: {
     type: String,
     select: false,
   },
