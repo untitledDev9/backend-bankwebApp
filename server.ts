@@ -1,4 +1,5 @@
 import express from 'express';
+import { createServer } from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
@@ -7,10 +8,12 @@ import errorHandler from './middleware/errorHandler';
 import authRoutes from './routes/auth';
 import customerRoutes from './routes/customer';
 import adminRoutes from './routes/admin';
+import { setupSocket } from './socket';
 
 dotenv.config();
 
 const app = express();
+const server = createServer(app);
 
 // Connect to MongoDB
 connectDB();
@@ -44,13 +47,16 @@ app.use('/api/admin', adminRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ success: true, message: 'Heritage Trust Bank API is running.' });
+  res.json({ success: true, message: 'NileTrust Bank API is running.' });
 });
 
 // Error handler
 app.use(errorHandler);
 
+// Socket.io
+setupSocket(server, allowedOrigins);
+
 const PORT = process.env.PORT || 7070;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
