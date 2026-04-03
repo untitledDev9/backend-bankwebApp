@@ -8,6 +8,7 @@ import errorHandler from './middleware/errorHandler';
 import authRoutes from './routes/auth';
 import customerRoutes from './routes/customer';
 import adminRoutes from './routes/admin';
+import chatRoutes from './routes/chat';
 import { setupSocket } from './socket';
 
 dotenv.config();
@@ -44,6 +45,7 @@ app.use(express.json());
 app.use('/api/auth', authRoutes);
 app.use('/api/customer', customerRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/chat', chatRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
