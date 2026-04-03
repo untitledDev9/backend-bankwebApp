@@ -9,7 +9,7 @@ import OTP_CODES from '../utils/otpCodes';
 
 const signToken = (id: unknown, role: string): string => {
   return jwt.sign({ id: String(id), role }, process.env.JWT_SECRET as string, {
-    expiresIn: (process.env.JWT_EXPIRY || '20m') as any,
+    expiresIn: (process.env.JWT_EXPIRY || '7d') as any,
   });
 };
 
