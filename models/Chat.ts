@@ -14,6 +14,7 @@ export interface IChat extends Document {
   messages: IChatMessage[];
   created_at: Date;
   updated_at: Date;
+  expires_at: Date | null;
 }
 
 const chatMessageSchema = new Schema<IChatMessage>(
@@ -33,10 +34,17 @@ const chatSchema = new Schema<IChat>({
   messages: [chatMessageSchema],
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },
+  expires_at: { type: Date, default: () => new Date(Date.now() + 3 * 24 * 60 * 60 * 1000), expires: 0 },
 });
 
 chatSchema.pre('save', function () {
   this.updated_at = new Date();
+  // Admin chats never expire; AI/bot chats expire after 3 days of last activity
+  if (this.status === 'admin') {
+    this.expires_at = null as any;
+  } else if (this.status !== 'closed') {
+    this.expires_at = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+  }
 });
 
 export default mongoose.model<IChat>('Chat', chatSchema);
