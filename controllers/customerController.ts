@@ -353,7 +353,7 @@ export const transfer = async (req: AuthRequest, res: Response, next: NextFuncti
 // Lookup account for transfer confirmation
 export const lookupAccount = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const { recipient_id } = req.params;
+    const recipient_id = req.params.recipient_id as string;
     let account;
     let user;
 
