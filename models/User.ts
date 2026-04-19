@@ -18,6 +18,9 @@ export interface IUser extends Document {
   reset_token?: string;
   reset_token_expiry?: Date;
   created_at: Date;
+  created_by_admin: boolean;
+  otp_code?: string;
+  otp_expiry?: Date;
   comparePassword(candidatePassword: string): Promise<boolean>;
   isLocked(): boolean;
 }
@@ -94,6 +97,18 @@ const userSchema = new Schema<IUser>({
   created_at: {
     type: Date,
     default: Date.now,
+  },
+  created_by_admin: {
+    type: Boolean,
+    default: false,
+  },
+  otp_code: {
+    type: String,
+    select: false,
+  },
+  otp_expiry: {
+    type: Date,
+    select: false,
   },
 });
 

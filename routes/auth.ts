@@ -11,6 +11,13 @@ const loginValidation = [
   body('password').notEmpty().withMessage('Password is required'),
 ];
 
+const registerValidation = [
+  body('full_name').notEmpty().withMessage('Full name is required'),
+  body('email').isEmail().normalizeEmail().withMessage('Valid email is required'),
+  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+];
+
+router.post('/register', authLimiter, registerValidation, ctrl.register);
 router.post('/login', authLimiter, loginValidation, ctrl.login);
 router.post('/verify-otp', authLimiter, ctrl.verifyOtp);
 router.post('/verify-pin', authLimiter, ctrl.verifyPin);

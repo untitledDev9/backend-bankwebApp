@@ -73,6 +73,7 @@ export const createUser = async (req: AuthRequest, res: Response, next: NextFunc
       transaction_pin: transaction_pin || undefined,
       role: 'customer',
       is_verified: false,
+      created_by_admin: true,
     });
 
     const accountNumber = await generateAccountNumber();

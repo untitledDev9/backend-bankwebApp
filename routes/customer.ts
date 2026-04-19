@@ -37,13 +37,13 @@ router.post(
 router.post(
   '/transfer',
   [
-    body('account_number').trim().notEmpty().withMessage('Account number is required'),
+    body('recipient_id').trim().notEmpty().withMessage('Account number or email is required'),
     body('amount').isFloat({ gt: 0 }).withMessage('Amount must be positive'),
     body('description').optional().trim(),
   ],
   ctrl.transfer
 );
 
-router.get('/lookup-account/:account_number', ctrl.lookupAccount);
+router.get('/lookup-account/:recipient_id', ctrl.lookupAccount);
 
 export default router;

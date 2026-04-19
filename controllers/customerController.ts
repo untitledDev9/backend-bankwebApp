@@ -3,6 +3,7 @@ import User from '../models/User';
 import Account from '../models/Account';
 import Transaction from '../models/Transaction';
 import { AuthRequest } from '../middleware/protect';
+import sendEmail from '../utils/sendEmail';
 
 // Get customer profile + account
 export const getMe = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
@@ -223,10 +224,10 @@ export const changePassword = async (req: AuthRequest, res: Response, next: Next
 // Transfer to another account
 export const transfer = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const { account_number, amount, description, transaction_pin } = req.body;
+    const { recipient_id, amount, description, transaction_pin } = req.body;
 
-    if (!account_number || !amount || amount <= 0) {
-      res.status(400).json({ success: false, message: 'Valid account number and amount are required.' });
+    if (!recipient_id || !amount || amount <= 0) {
+      res.status(400).json({ success: false, message: 'Valid recipient and amount are required.' });
       return;
     }
 
@@ -258,19 +259,36 @@ export const transfer = async (req: AuthRequest, res: Response, next: NextFuncti
       return;
     }
 
-    if (senderAccount.account_number === account_number) {
+    let recipientAccount;
+    let recipientUser;
+
+    if (recipient_id.includes('@')) {
+      recipientUser = await User.findOne({ email: recipient_id.toLowerCase().trim() });
+      if (!recipientUser) {
+        res.status(404).json({ success: false, message: 'Recipient not found.' });
+        return;
+      }
+      recipientAccount = await Account.findOne({ user_id: recipientUser._id });
+    } else {
+      recipientAccount = await Account.findOne({ account_number: recipient_id });
+      if (!recipientAccount) {
+         res.status(404).json({ success: false, message: 'Recipient account not found.' });
+         return;
+      }
+      recipientUser = await User.findById(recipientAccount.user_id);
+    }
+
+    if (!recipientAccount || !recipientUser) {
+      res.status(404).json({ success: false, message: 'Recipient not found.' });
+      return;
+    }
+
+    if (senderAccount.account_number === recipientAccount.account_number) {
       res.status(400).json({ success: false, message: 'Cannot transfer to your own account.' });
       return;
     }
 
-    const recipientAccount = await Account.findOne({ account_number });
-    if (!recipientAccount) {
-      res.status(404).json({ success: false, message: 'Recipient account not found.' });
-      return;
-    }
-
-    const recipientUser = await User.findById(recipientAccount.user_id);
-    if (!recipientUser || !recipientUser.is_active) {
+    if (!recipientUser.is_active) {
       res.status(400).json({ success: false, message: 'Recipient account is not active.' });
       return;
     }
@@ -297,7 +315,7 @@ export const transfer = async (req: AuthRequest, res: Response, next: NextFuncti
       type: 'debit',
       amount,
       balance_after: senderAccount.balance,
-      description: `Transfer to ${account_number} — ${desc}`,
+      description: `Transfer to ${recipientAccount.account_number} — ${desc}`,
       created_by: req.user!._id,
     });
 
@@ -309,6 +327,16 @@ export const transfer = async (req: AuthRequest, res: Response, next: NextFuncti
       description: `Transfer from ${senderAccount.account_number} — ${desc}`,
       created_by: req.user!._id,
     });
+
+    try {
+      await sendEmail({
+        email: recipientUser.email,
+        subject: 'NileTrust Bank - Funds Received',
+        message: `Hello ${recipientUser.full_name},\n\nYou have just received a transfer of ${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} from ${sender.full_name}.\n\nDescription: ${desc}\nYour new balance is: ${recipientAccount.balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}\n\nThank you for choosing NileTrust Bank!`,
+      });
+    } catch (err) {
+      console.error('Failed to send receipt email to recipient:', err);
+    }
 
     res.json({
       success: true,
@@ -325,17 +353,33 @@ export const transfer = async (req: AuthRequest, res: Response, next: NextFuncti
 // Lookup account for transfer confirmation
 export const lookupAccount = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const { account_number } = req.params;
-    const account = await Account.findOne({ account_number: account_number as string });
-    if (!account) {
-      res.status(404).json({ success: false, message: 'Account not found.' });
-      return;
+    const { recipient_id } = req.params;
+    let account;
+    let user;
+
+    if (recipient_id.includes('@')) {
+      user = await User.findOne({ email: recipient_id.toLowerCase().trim() });
+      if (!user || !user.is_active) {
+        res.status(404).json({ success: false, message: 'Account not found.' });
+        return;
+      }
+      account = await Account.findOne({ user_id: user._id });
+    } else {
+      account = await Account.findOne({ account_number: recipient_id });
+      if (!account) {
+        res.status(404).json({ success: false, message: 'Account not found.' });
+        return;
+      }
+      user = await User.findById(account.user_id);
+      if (!user || !user.is_active) {
+        res.status(404).json({ success: false, message: 'Account not found.' });
+        return;
+      }
     }
 
-    const user = await User.findById(account.user_id);
-    if (!user || !user.is_active) {
-      res.status(404).json({ success: false, message: 'Account not found.' });
-      return;
+    if (!account || !user) {
+       res.status(404).json({ success: false, message: 'Account not found.' });
+       return;
     }
 
     // Return masked name for privacy

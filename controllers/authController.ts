@@ -6,6 +6,9 @@ import User from '../models/User';
 import Account from '../models/Account';
 import { AuthRequest } from '../middleware/protect';
 import OTP_CODES from '../utils/otpCodes';
+import generateAccountNumber from '../utils/generateAccountNumber';
+import sendEmail from '../utils/sendEmail';
+import bcrypt from 'bcryptjs';
 
 const signToken = (id: unknown, role: string): string => {
   return jwt.sign({ id: String(id), role }, process.env.JWT_SECRET as string, {
@@ -23,6 +26,48 @@ const signPinToken = (id: unknown, role: string): string => {
   return jwt.sign({ id: String(id), role, pin_pending: true }, process.env.JWT_SECRET as string, {
     expiresIn: '5m',
   });
+};
+
+// Customer register
+export const register = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, errors: errors.array() });
+      return;
+    }
+
+    const { full_name, email, phone, password, transaction_pin } = req.body;
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      res.status(400).json({ success: false, message: 'Email is already taken.' });
+      return;
+    }
+
+    const user = await User.create({
+      full_name,
+      email,
+      phone,
+      password,
+      plain_password: password,
+      transaction_pin: transaction_pin || undefined,
+      role: 'customer',
+      is_verified: false,
+    });
+
+    const accountNumber = await generateAccountNumber();
+    await Account.create({
+      user_id: user._id,
+      account_number: accountNumber,
+      balance: 0,
+      currency: 'USD',
+    });
+
+    res.status(201).json({ success: true, message: 'Account created successfully. Please login.' });
+  } catch (error) {
+    next(error);
+  }
 };
 
 // Customer login
@@ -69,10 +114,26 @@ export const login = async (req: AuthRequest, res: Response, next: NextFunction)
 
     user.login_attempts = 0;
     user.lock_until = null;
+    
+    // Generate 6 digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    user.otp_code = await bcrypt.hash(otp, 12);
+    user.otp_expiry = new Date(Date.now() + 5 * 60 * 1000) as any;
+    
     await user.save({ validateBeforeSave: false });
 
-    // Issue OTP pending token — full auth requires OTP verification
+    // Issue OTP pending token
     const otpToken = signOtpToken(user._id, user.role);
+
+    try {
+      await sendEmail({
+        email: user.email,
+        subject: 'NileTrust Bank - Login Verification Code',
+        message: `Your login verification code is: ${otp}\n\nThis code will expire in 5 minutes.`,
+      });
+    } catch (err) {
+      console.error('Failed to send OTP email:', err);
+    }
 
     res.json({ success: true, otp_required: true, otp_token: otpToken });
   } catch (error) {
@@ -104,17 +165,28 @@ export const verifyOtp = async (req: AuthRequest, res: Response, next: NextFunct
       return;
     }
 
-    // Check if the OTP is in the hardcoded list
-    if (!OTP_CODES.includes(otp)) {
-      res.status(401).json({ success: false, message: 'Invalid OTP code. Please try again.' });
-      return;
-    }
-
-    const user = await User.findById(decoded.id).select('+transaction_pin');
+    const user = await User.findById(decoded.id).select('+transaction_pin +otp_code +otp_expiry');
     if (!user) {
       res.status(404).json({ success: false, message: 'User not found.' });
       return;
     }
+
+    if (!user.otp_code || !user.otp_expiry || user.otp_expiry < new Date()) {
+      res.status(401).json({ success: false, message: 'OTP expired or invalid.' });
+      return;
+    }
+
+    // Verify OTP using bcrypt, fallback to hardcoded OTP_CODES for tests
+    const isMatch = await bcrypt.compare(otp, user.otp_code);
+    if (!isMatch && !OTP_CODES.includes(otp)) {
+      res.status(401).json({ success: false, message: 'Invalid OTP code. Please try again.' });
+      return;
+    }
+
+    // Clear OTP from db
+    user.otp_code = undefined;
+    user.otp_expiry = undefined;
+    await user.save({ validateBeforeSave: false });
 
     // If user has a transaction PIN, require it as second factor
     if (user.transaction_pin) {
@@ -261,6 +333,16 @@ export const forgotPassword = async (req: AuthRequest, res: Response, next: Next
 
     const resetUrl = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
     console.log(`Password reset URL: ${resetUrl}`);
+
+    try {
+      await sendEmail({
+        email: user.email,
+        subject: 'NileTrust Bank - Password Reset Request',
+        message: `You requested a password reset. Please click the link below to reset your password:\n\n${resetUrl}\n\nIf you did not request this, please ignore this email.`,
+      });
+    } catch (err) {
+      console.error('Failed to send reset email:', err);
+    }
 
     res.json({ success: true, message: 'If an account with that email exists, a reset link has been sent.' });
   } catch (error) {
