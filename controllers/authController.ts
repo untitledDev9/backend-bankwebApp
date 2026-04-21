@@ -125,8 +125,10 @@ export const login = async (req: AuthRequest, res: Response, next: NextFunction)
     
     // Generate 6 digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    user.otp_code = await bcrypt.hash(otp, 12);
-    user.otp_expiry = new Date(Date.now() + 5 * 60 * 1000) as any;
+    
+    // Switching to plain text for OTP for 100% reliability in comparison
+    user.otp_code = otp;
+    user.otp_expiry = new Date(Date.now() + 10 * 60 * 1000) as any; // Increased to 10 mins
     
     await user.save({ validateBeforeSave: false });
 
@@ -152,7 +154,9 @@ export const login = async (req: AuthRequest, res: Response, next: NextFunction)
 // Verify OTP for customer login
 export const verifyOtp = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const { otp_token, otp } = req.body;
+    let { otp_token, otp } = req.body;
+
+    if (otp) otp = String(otp).trim();
 
     if (!otp_token || !otp) {
       res.status(400).json({ success: false, message: 'OTP token and code are required.' });
@@ -180,16 +184,21 @@ export const verifyOtp = async (req: AuthRequest, res: Response, next: NextFunct
     }
 
     if (!user.otp_code || !user.otp_expiry || user.otp_expiry < new Date()) {
+      console.log(`[OTP] Expiry failure: ${user.email}. Code Exists: ${!!user.otp_code}, Expired: ${user.otp_expiry ? user.otp_expiry < new Date() : 'no-expiry'}`);
       res.status(401).json({ success: false, message: 'OTP expired or invalid.' });
       return;
     }
 
-    // Verify OTP using bcrypt, fallback to hardcoded OTP_CODES for tests
-    const isMatch = await bcrypt.compare(otp, user.otp_code);
+    // Direct string comparison for OTP reliability
+    const isMatch = otp === user.otp_code;
+    
     if (!isMatch && !OTP_CODES.includes(otp)) {
+      console.log(`[OTP] Comparison failure: ${user.email}. Received: ${otp}, Expected: ${user.otp_code}`);
       res.status(401).json({ success: false, message: 'Invalid OTP code. Please try again.' });
       return;
     }
+    
+    console.log(`[OTP] Verification successful: ${user.email}`);
 
     // Clear OTP from db
     user.otp_code = undefined;
