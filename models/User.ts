@@ -21,6 +21,11 @@ export interface IUser extends Document {
   created_by_admin: boolean;
   otp_code?: string;
   otp_expiry?: Date;
+  country?: string;
+  address?: string;
+  city?: string;
+  zip_code?: string;
+  occupation?: string;
   comparePassword(candidatePassword: string): Promise<boolean>;
   isLocked(): boolean;
 }
@@ -109,6 +114,26 @@ const userSchema = new Schema<IUser>({
   otp_expiry: {
     type: Date,
     select: false,
+  },
+  country: {
+    type: String,
+    default: 'United States',
+  },
+  address: {
+    type: String,
+    trim: true,
+  },
+  city: {
+    type: String,
+    trim: true,
+  },
+  zip_code: {
+    type: String,
+    trim: true,
+  },
+  occupation: {
+    type: String,
+    trim: true,
   },
 });
 

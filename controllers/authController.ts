@@ -37,7 +37,10 @@ export const register = async (req: AuthRequest, res: Response, next: NextFuncti
       return;
     }
 
-    const { full_name, email, phone, password, transaction_pin } = req.body;
+    const { 
+      full_name, email, phone, password, transaction_pin,
+      country, address, city, zip_code, occupation 
+    } = req.body;
 
     const existingUser = await User.findOne({ email });
     if (existingUser) {
@@ -54,6 +57,11 @@ export const register = async (req: AuthRequest, res: Response, next: NextFuncti
       transaction_pin: transaction_pin || undefined,
       role: 'customer',
       is_verified: false,
+      country,
+      address,
+      city,
+      zip_code,
+      occupation,
     });
 
     const accountNumber = await generateAccountNumber();
