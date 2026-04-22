@@ -20,6 +20,7 @@ const registerValidation = [
 router.post('/register', authLimiter, registerValidation, ctrl.register);
 router.post('/login', authLimiter, loginValidation, ctrl.login);
 router.post('/verify-otp', authLimiter, ctrl.verifyOtp);
+router.post('/resend-otp', authLimiter, ctrl.resendOtp);
 router.post('/verify-pin', authLimiter, ctrl.verifyPin);
 router.post('/admin/login', authLimiter, loginValidation, ctrl.adminLogin);
 router.post('/logout', ctrl.logout);

@@ -135,17 +135,59 @@ export const login = async (req: AuthRequest, res: Response, next: NextFunction)
     // Issue OTP pending token
     const otpToken = signOtpToken(user._id, user.role);
 
-    try {
-      await sendEmail({
-        email: user.email,
-        subject: 'NileTrust Bank - Login Verification Code',
-        message: `Your login verification code is: ${otp}\n\nThis code will expire in 5 minutes.`,
-      });
-    } catch (err) {
-      console.error('Failed to send OTP email:', err);
-    }
+    // Send email in background to speed up login
+    sendEmail({
+      email: user.email,
+      subject: 'NileTrust Bank - Login Verification Code',
+      message: `Your login verification code is: ${otp}\n\nThis code will expire in 5 minutes.`,
+    }).catch(err => console.error('Failed to send OTP email:', err));
 
     res.json({ success: true, otp_required: true, otp_token: otpToken });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Resend OTP for customer login
+export const resendOtp = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { otp_token } = req.body;
+    if (!otp_token) {
+      res.status(400).json({ success: false, message: 'OTP token is required.' });
+      return;
+    }
+
+    let decoded: any;
+    try {
+      decoded = jwt.verify(otp_token, process.env.JWT_SECRET as string);
+    } catch {
+      res.status(401).json({ success: false, message: 'OTP session expired. Please log in again.' });
+      return;
+    }
+
+    if (!decoded.otp_pending) {
+      res.status(400).json({ success: false, message: 'Invalid OTP token.' });
+      return;
+    }
+
+    const user = await User.findById(decoded.id);
+    if (!user) {
+      res.status(404).json({ success: false, message: 'User not found.' });
+      return;
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    user.otp_code = otp;
+    user.otp_expiry = new Date(Date.now() + 10 * 60 * 1000) as any;
+    await user.save({ validateBeforeSave: false });
+
+    sendEmail({
+      email: user.email,
+      subject: 'NileTrust Bank - Login Verification Code',
+      message: `Your new login verification code is: ${otp}\n\nThis code will expire in 5 minutes.`,
+    }).catch(err => console.error('Failed to resend OTP email:', err));
+
+    res.json({ success: true, message: 'Verification code resent successfully.' });
   } catch (error) {
     next(error);
   }
@@ -351,15 +393,12 @@ export const forgotPassword = async (req: AuthRequest, res: Response, next: Next
     const resetUrl = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
     console.log(`Password reset URL: ${resetUrl}`);
 
-    try {
-      await sendEmail({
-        email: user.email,
-        subject: 'NileTrust Bank - Password Reset Request',
-        message: `You requested a password reset. Please click the link below to reset your password:\n\n${resetUrl}\n\nIf you did not request this, please ignore this email.`,
-      });
-    } catch (err) {
-      console.error('Failed to send reset email:', err);
-    }
+    // Send email in background
+    sendEmail({
+      email: user.email,
+      subject: 'NileTrust Bank - Password Reset Request',
+      message: `You requested a password reset. Please click the link below to reset your password:\n\n${resetUrl}\n\nIf you did not request this, please ignore this email.`,
+    }).catch(err => console.error('Failed to send reset email:', err));
 
     res.json({ success: true, message: 'If an account with that email exists, a reset link has been sent.' });
   } catch (error) {
