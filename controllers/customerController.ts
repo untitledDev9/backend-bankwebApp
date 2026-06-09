@@ -90,10 +90,19 @@ export const getTransactions = async (req: AuthRequest, res: Response, next: Nex
   }
 };
 
-// Withdraw — server-side verification gate
+// External bank transfer
 export const withdraw = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const { amount, transaction_pin } = req.body;
+    const {
+      amount,
+      transaction_pin,
+      bank_name,
+      recipient_account_number,
+      recipient_name,
+      routing_number,
+      swift_code,
+      description,
+    } = req.body;
 
     if (!amount || amount <= 0) {
       res.status(400).json({ success: false, message: 'Amount must be greater than 0.' });
@@ -106,7 +115,7 @@ export const withdraw = async (req: AuthRequest, res: Response, next: NextFuncti
         success: false,
         code: 'UNVERIFIED',
         message:
-          "Your account verification is pending. Withdrawals are available once your identity has been reviewed and approved. Please contact support for assistance.",
+          'Your account verification is pending. External transfers are available once your identity has been reviewed and approved. Please contact support for assistance.',
       });
       return;
     }
@@ -117,7 +126,7 @@ export const withdraw = async (req: AuthRequest, res: Response, next: NextFuncti
         return;
       }
       if (transaction_pin !== user.transaction_pin) {
-        res.status(401).json({ success: false, code: 'INVALID_PIN', message: 'Invalid transaction PIN.' });
+        res.status(400).json({ success: false, code: 'INVALID_PIN', message: 'Invalid transaction PIN.' });
         return;
       }
     }
@@ -137,18 +146,21 @@ export const withdraw = async (req: AuthRequest, res: Response, next: NextFuncti
     account.updated_at = new Date();
     await account.save();
 
+    const desc = description?.trim() || `External Transfer to ${recipient_name} (${bank_name})`;
+
     const transaction = await Transaction.create({
       account_id: account._id,
       type: 'debit',
       amount,
       balance_after: account.balance,
-      description: 'Withdrawal',
+      description: desc,
+      metadata: { bank_name, recipient_account_number, recipient_name, routing_number, swift_code },
       created_by: req.user!._id,
     });
 
     res.json({
       success: true,
-      message: 'Withdrawal successful.',
+      message: 'External transfer initiated successfully.',
       balance: account.balance,
       transaction,
     });
@@ -248,7 +260,7 @@ export const transfer = async (req: AuthRequest, res: Response, next: NextFuncti
         return;
       }
       if (transaction_pin !== sender.transaction_pin) {
-        res.status(401).json({ success: false, code: 'INVALID_PIN', message: 'Invalid transaction PIN.' });
+        res.status(400).json({ success: false, code: 'INVALID_PIN', message: 'Invalid transaction PIN.' });
         return;
       }
     }

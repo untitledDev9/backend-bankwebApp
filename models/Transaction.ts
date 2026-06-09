@@ -1,11 +1,20 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
+export interface ITransactionMetadata {
+  bank_name?: string;
+  recipient_account_number?: string;
+  recipient_name?: string;
+  routing_number?: string;
+  swift_code?: string;
+}
+
 export interface ITransaction extends Document {
   account_id: mongoose.Types.ObjectId;
   type: 'debit' | 'credit' | 'adjustment';
   amount: number;
   balance_after: number;
   description: string;
+  metadata?: ITransactionMetadata;
   created_at: Date;
   created_by: mongoose.Types.ObjectId | null;
 }
@@ -33,6 +42,16 @@ const transactionSchema = new Schema<ITransaction>({
   description: {
     type: String,
     default: '',
+  },
+  metadata: {
+    type: {
+      bank_name: String,
+      recipient_account_number: String,
+      recipient_name: String,
+      routing_number: String,
+      swift_code: String,
+    },
+    default: undefined,
   },
   created_at: {
     type: Date,

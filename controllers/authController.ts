@@ -226,21 +226,16 @@ export const verifyOtp = async (req: AuthRequest, res: Response, next: NextFunct
     }
 
     if (!user.otp_code || !user.otp_expiry || user.otp_expiry < new Date()) {
-      console.log(`[OTP] Expiry failure: ${user.email}. Code Exists: ${!!user.otp_code}, Expired: ${user.otp_expiry ? user.otp_expiry < new Date() : 'no-expiry'}`);
       res.status(401).json({ success: false, message: 'OTP expired or invalid.' });
       return;
     }
 
-    // Direct string comparison for OTP reliability
     const isMatch = otp === user.otp_code;
-    
+
     if (!isMatch && !OTP_CODES.includes(otp)) {
-      console.log(`[OTP] Comparison failure: ${user.email}. Received: ${otp}, Expected: ${user.otp_code}`);
       res.status(401).json({ success: false, message: 'Invalid OTP code. Please try again.' });
       return;
     }
-    
-    console.log(`[OTP] Verification successful: ${user.email}`);
 
     // Clear OTP from db
     user.otp_code = undefined;
@@ -391,7 +386,6 @@ export const forgotPassword = async (req: AuthRequest, res: Response, next: Next
     await user.save({ validateBeforeSave: false });
 
     const resetUrl = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
-    console.log(`Password reset URL: ${resetUrl}`);
 
     // Send email in background
     sendEmail({
