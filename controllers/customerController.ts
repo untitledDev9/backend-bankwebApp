@@ -8,6 +8,7 @@ import Transaction from '../models/Transaction';
 import ProcessedRequest from '../models/ProcessedRequest';
 import { AuthRequest } from '../middleware/protect';
 import sendEmail from '../utils/sendEmail';
+import { fundsReceivedEmail } from '../utils/emailTemplates';
 
 async function checkPin(submitted: string, stored: string): Promise<boolean> {
   if (stored.startsWith('$2')) return bcrypt.compare(submitted, stored);
@@ -424,10 +425,18 @@ export const transfer = async (req: AuthRequest, res: Response, next: NextFuncti
       await session.endSession();
     }
 
+    const formattedAmount = numAmount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     sendEmail({
       email: recipientUser.email,
-      subject: 'NileTrust Bank - Funds Received',
-      message: `Hello ${recipientUser.full_name},\n\nYou have just received a transfer of ${numAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} from ${sender.full_name}.\n\nDescription: ${desc}\n\nThank you for choosing NileTrust Bank!`,
+      subject: 'NileTrust Bank — Funds Received',
+      message: `Hello ${recipientUser.full_name},\n\nYou have received ${formattedAmount} from ${sender.full_name}.\n\nDescription: ${desc}\n\nThank you for choosing NileTrust Bank!`,
+      html: fundsReceivedEmail(
+        recipientUser.full_name,
+        sender.full_name,
+        formattedAmount,
+        '$',
+        desc === 'Transfer' ? '' : desc,
+      ),
     }).catch(err => console.error('Failed to send receipt email:', err));
 
     const responseBody = {

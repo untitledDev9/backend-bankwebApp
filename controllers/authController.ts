@@ -8,6 +8,7 @@ import RevokedToken from '../models/RevokedToken';
 import { AuthRequest } from '../middleware/protect';
 import generateAccountNumber from '../utils/generateAccountNumber';
 import sendEmail from '../utils/sendEmail';
+import { otpEmail, passwordResetEmail } from '../utils/emailTemplates';
 import bcrypt from 'bcryptjs';
 
 const signToken = (id: unknown, role: string): string => {
@@ -134,8 +135,9 @@ export const login = async (req: AuthRequest, res: Response, next: NextFunction)
 
     sendEmail({
       email: user.email,
-      subject: 'NileTrust Bank - Login Verification Code',
+      subject: 'NileTrust Bank — Login Verification Code',
       message: `Your login verification code is: ${otp}\n\nThis code will expire in 10 minutes.`,
+      html: otpEmail(otp),
     }).catch(err => console.error('Failed to send OTP email:', err));
 
     res.json({ success: true, otp_required: true, otp_token: otpToken });
@@ -179,8 +181,9 @@ export const resendOtp = async (req: AuthRequest, res: Response, next: NextFunct
 
     sendEmail({
       email: user.email,
-      subject: 'NileTrust Bank - Login Verification Code',
+      subject: 'NileTrust Bank — New Verification Code',
       message: `Your new login verification code is: ${otp}\n\nThis code will expire in 10 minutes.`,
+      html: otpEmail(otp, true),
     }).catch(err => console.error('Failed to resend OTP email:', err));
 
     res.json({ success: true, message: 'Verification code resent successfully.' });
@@ -400,8 +403,9 @@ export const forgotPassword = async (req: AuthRequest, res: Response, next: Next
 
     sendEmail({
       email: user.email,
-      subject: 'NileTrust Bank - Password Reset Request',
-      message: `You requested a password reset. Please click the link below to reset your password:\n\n${resetUrl}\n\nIf you did not request this, please ignore this email.`,
+      subject: 'NileTrust Bank — Password Reset Request',
+      message: `You requested a password reset. Click the link below to reset your password:\n\n${resetUrl}\n\nIf you did not request this, please ignore this email.`,
+      html: passwordResetEmail(resetUrl),
     }).catch(err => console.error('Failed to send reset email:', err));
 
     res.json({ success: true, message: 'If an account with that email exists, a reset link has been sent.' });
