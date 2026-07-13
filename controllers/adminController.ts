@@ -1,4 +1,5 @@
 import { Response, NextFunction } from 'express';
+import bcrypt from 'bcryptjs';
 import User from '../models/User';
 import Account from '../models/Account';
 import Transaction from '../models/Transaction';
@@ -69,8 +70,7 @@ export const createUser = async (req: AuthRequest, res: Response, next: NextFunc
       email,
       phone,
       password,
-      plain_password: password,
-      transaction_pin: transaction_pin || undefined,
+      transaction_pin: transaction_pin ? await bcrypt.hash(transaction_pin, 10) : undefined,
       role: 'customer',
       is_verified: false,
       created_by_admin: true,
@@ -108,7 +108,7 @@ export const createUser = async (req: AuthRequest, res: Response, next: NextFunc
 // Get full customer detail
 export const getUserDetail = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const user = await User.findById(req.params.id).select('+plain_password +transaction_pin');
+    const user = await User.findById(req.params.id);
     if (!user || user.role !== 'customer') {
       res.status(404).json({ success: false, message: 'Customer not found.' });
       return;
@@ -119,10 +119,7 @@ export const getUserDetail = async (req: AuthRequest, res: Response, next: NextF
       .sort({ created_at: -1 })
       .limit(50);
 
-    const userData = user.toJSON();
-    userData.plain_password = user.plain_password;
-    userData.transaction_pin = user.transaction_pin;
-    res.json({ success: true, user: userData, account, transactions });
+    res.json({ success: true, user: user.toJSON(), account, transactions });
   } catch (error) {
     next(error);
   }
@@ -365,7 +362,7 @@ export const setTransactionPin = async (req: AuthRequest, res: Response, next: N
       return;
     }
 
-    user.transaction_pin = transaction_pin;
+    user.transaction_pin = await bcrypt.hash(transaction_pin, 10);
     await user.save({ validateBeforeSave: false });
 
     await AuditLog.create({

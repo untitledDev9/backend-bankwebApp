@@ -5,7 +5,6 @@ export interface IUser extends Document {
   full_name: string;
   email: string;
   password: string;
-  plain_password?: string;
   transaction_pin?: string;
   phone?: string;
   role: 'customer' | 'admin';
@@ -47,10 +46,6 @@ const userSchema = new Schema<IUser>({
     type: String,
     required: [true, 'Password is required'],
     minlength: 8,
-    select: false,
-  },
-  plain_password: {
-    type: String,
     select: false,
   },
   transaction_pin: {
@@ -153,7 +148,6 @@ userSchema.methods.isLocked = function (): boolean {
 userSchema.methods.toJSON = function () {
   const obj = this.toObject();
   delete obj.password;
-  delete obj.plain_password;
   delete obj.reset_token;
   delete obj.reset_token_expiry;
   return obj;

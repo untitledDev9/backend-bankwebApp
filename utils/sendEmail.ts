@@ -6,23 +6,21 @@ interface EmailOptions {
   message: string;
 }
 
-const sendEmail = async (options: EmailOptions): Promise<void> => {
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_APP_PASSWORD,
-    },
-  });
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_APP_PASSWORD,
+  },
+});
 
-  const message = {
-    from: process.env.EMAIL_FROM || '"NileTrust Bank" <noreply@niletrust.com>',
+const sendEmail = async (options: EmailOptions): Promise<void> => {
+  await transporter.sendMail({
+    from: process.env.EMAIL_FROM || `NileTrust Bank <${process.env.EMAIL_USER}>`,
     to: options.email,
     subject: options.subject,
     text: options.message,
-  };
-
-  await transporter.sendMail(message);
+  });
 };
 
 export default sendEmail;

@@ -4,27 +4,28 @@ import crypto from 'crypto';
 import { validationResult } from 'express-validator';
 import User from '../models/User';
 import Account from '../models/Account';
+import RevokedToken from '../models/RevokedToken';
 import { AuthRequest } from '../middleware/protect';
-import OTP_CODES from '../utils/otpCodes';
 import generateAccountNumber from '../utils/generateAccountNumber';
 import sendEmail from '../utils/sendEmail';
 import bcrypt from 'bcryptjs';
 
 const signToken = (id: unknown, role: string): string => {
-  return jwt.sign({ id: String(id), role }, process.env.JWT_SECRET as string, {
+  const jti = crypto.randomBytes(16).toString('hex');
+  return jwt.sign({ id: String(id), role, jti }, process.env.JWT_SECRET as string, {
     expiresIn: (process.env.JWT_EXPIRY || '7d') as any,
   });
 };
 
 const signOtpToken = (id: unknown, role: string): string => {
   return jwt.sign({ id: String(id), role, otp_pending: true }, process.env.JWT_SECRET as string, {
-    expiresIn: '5m',
+    expiresIn: '10m',
   });
 };
 
 const signPinToken = (id: unknown, role: string): string => {
   return jwt.sign({ id: String(id), role, pin_pending: true }, process.env.JWT_SECRET as string, {
-    expiresIn: '5m',
+    expiresIn: '10m',
   });
 };
 
@@ -37,9 +38,9 @@ export const register = async (req: AuthRequest, res: Response, next: NextFuncti
       return;
     }
 
-    const { 
+    const {
       full_name, email, phone, password, transaction_pin,
-      country, address, city, zip_code, occupation 
+      country, address, city, zip_code, occupation,
     } = req.body;
 
     const existingUser = await User.findOne({ email });
@@ -53,8 +54,9 @@ export const register = async (req: AuthRequest, res: Response, next: NextFuncti
       email,
       phone,
       password,
-      plain_password: password,
-      transaction_pin: transaction_pin || undefined,
+      transaction_pin: transaction_pin
+        ? await bcrypt.hash(transaction_pin, 10)
+        : undefined,
       role: 'customer',
       is_verified: false,
       country,
@@ -122,24 +124,18 @@ export const login = async (req: AuthRequest, res: Response, next: NextFunction)
 
     user.login_attempts = 0;
     user.lock_until = null;
-    
-    // Generate 6 digit OTP
+
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    
-    // Switching to plain text for OTP for 100% reliability in comparison
     user.otp_code = otp;
-    user.otp_expiry = new Date(Date.now() + 10 * 60 * 1000) as any; // Increased to 10 mins
-    
+    user.otp_expiry = new Date(Date.now() + 10 * 60 * 1000) as any;
     await user.save({ validateBeforeSave: false });
 
-    // Issue OTP pending token
     const otpToken = signOtpToken(user._id, user.role);
 
-    // Send email in background to speed up login
     sendEmail({
       email: user.email,
       subject: 'NileTrust Bank - Login Verification Code',
-      message: `Your login verification code is: ${otp}\n\nThis code will expire in 5 minutes.`,
+      message: `Your login verification code is: ${otp}\n\nThis code will expire in 10 minutes.`,
     }).catch(err => console.error('Failed to send OTP email:', err));
 
     res.json({ success: true, otp_required: true, otp_token: otpToken });
@@ -184,7 +180,7 @@ export const resendOtp = async (req: AuthRequest, res: Response, next: NextFunct
     sendEmail({
       email: user.email,
       subject: 'NileTrust Bank - Login Verification Code',
-      message: `Your new login verification code is: ${otp}\n\nThis code will expire in 5 minutes.`,
+      message: `Your new login verification code is: ${otp}\n\nThis code will expire in 10 minutes.`,
     }).catch(err => console.error('Failed to resend OTP email:', err));
 
     res.json({ success: true, message: 'Verification code resent successfully.' });
@@ -205,7 +201,6 @@ export const verifyOtp = async (req: AuthRequest, res: Response, next: NextFunct
       return;
     }
 
-    // Verify the OTP pending token
     let decoded: any;
     try {
       decoded = jwt.verify(otp_token, process.env.JWT_SECRET as string);
@@ -230,28 +225,22 @@ export const verifyOtp = async (req: AuthRequest, res: Response, next: NextFunct
       return;
     }
 
-    const isMatch = otp === user.otp_code;
-
-    if (!isMatch && !OTP_CODES.includes(otp)) {
+    if (otp !== user.otp_code) {
       res.status(401).json({ success: false, message: 'Invalid OTP code. Please try again.' });
       return;
     }
 
-    // Clear OTP from db
     user.otp_code = undefined;
     user.otp_expiry = undefined;
     await user.save({ validateBeforeSave: false });
 
-    // If user has a transaction PIN, require it as second factor
     if (user.transaction_pin) {
       const pinToken = signPinToken(user._id, user.role);
       res.json({ success: true, pin_required: true, pin_token: pinToken });
       return;
     }
 
-    // No PIN set — issue real auth token
     const token = signToken(user._id, user.role);
-
     res.json({ success: true, token, user: user.toJSON() });
   } catch (error) {
     next(error);
@@ -287,8 +276,9 @@ export const verifyPin = async (req: AuthRequest, res: Response, next: NextFunct
       return;
     }
 
-    if (pin !== user.transaction_pin) {
-      res.status(401).json({ success: false, message: 'Invalid PIN. Please try again.' });
+    const pinMatch = await verifyPin_compare(pin, user.transaction_pin!);
+    if (!pinMatch) {
+      res.status(400).json({ success: false, code: 'INVALID_PIN', message: 'Invalid PIN. Please try again.' });
       return;
     }
 
@@ -328,16 +318,36 @@ export const adminLogin = async (req: AuthRequest, res: Response, next: NextFunc
     }
 
     const token = signToken(user._id, user.role);
-
     res.json({ success: true, token, user: user.toJSON() });
   } catch (error) {
     next(error);
   }
 };
 
-// Logout
-export const logout = (req: AuthRequest, res: Response): void => {
-  res.json({ success: true, message: 'Logged out successfully.' });
+// Logout — revoke the token so it cannot be reused within its remaining lifetime
+export const logout = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
+        if (decoded.jti && decoded.exp) {
+          await RevokedToken.create({
+            jti: decoded.jti,
+            expires_at: new Date(decoded.exp * 1000),
+          });
+        }
+      } catch {
+        // Token already invalid — nothing to revoke
+      }
+    }
+
+    res.json({ success: true, message: 'Logged out successfully.' });
+  } catch (error) {
+    next(error);
+  }
 };
 
 // Get current user
@@ -385,9 +395,9 @@ export const forgotPassword = async (req: AuthRequest, res: Response, next: Next
     user.reset_token_expiry = new Date(Date.now() + 60 * 60 * 1000);
     await user.save({ validateBeforeSave: false });
 
-    const resetUrl = `${process.env.CLIENT_URL}/reset-password/${resetToken}`;
+    const clientUrl = (process.env.CLIENT_URL || '').split(',')[0].trim();
+    const resetUrl = `${clientUrl}/reset-password/${resetToken}`;
 
-    // Send email in background
     sendEmail({
       email: user.email,
       subject: 'NileTrust Bank - Password Reset Request',
@@ -433,3 +443,16 @@ export const resetPassword = async (req: AuthRequest, res: Response, next: NextF
     next(error);
   }
 };
+
+// Shared PIN comparison — handles both hashed (bcrypt) and legacy plaintext PINs,
+// re-hashing plaintext ones transparently on first use.
+export async function verifyPin_compare(
+  submitted: string,
+  stored: string,
+): Promise<boolean> {
+  const isHashed = stored.startsWith('$2');
+  if (isHashed) {
+    return bcrypt.compare(submitted, stored);
+  }
+  return submitted === stored;
+}

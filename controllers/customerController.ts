@@ -1,9 +1,18 @@
 import { Response, NextFunction } from 'express';
+import mongoose from 'mongoose';
+import bcrypt from 'bcryptjs';
+import { validationResult } from 'express-validator';
 import User from '../models/User';
 import Account from '../models/Account';
 import Transaction from '../models/Transaction';
+import ProcessedRequest from '../models/ProcessedRequest';
 import { AuthRequest } from '../middleware/protect';
 import sendEmail from '../utils/sendEmail';
+
+async function checkPin(submitted: string, stored: string): Promise<boolean> {
+  if (stored.startsWith('$2')) return bcrypt.compare(submitted, stored);
+  return submitted === stored;
+}
 
 // Get customer profile + account
 export const getMe = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
@@ -93,6 +102,22 @@ export const getTransactions = async (req: AuthRequest, res: Response, next: Nex
 // External bank transfer
 export const withdraw = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, errors: errors.array() });
+      return;
+    }
+
+    // Idempotency: return cached result for duplicate requests
+    const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+    if (idempotencyKey) {
+      const existing = await ProcessedRequest.findOne({ key: `withdraw:${idempotencyKey}` });
+      if (existing) {
+        res.json(existing.result);
+        return;
+      }
+    }
+
     const {
       amount,
       transaction_pin,
@@ -104,10 +129,7 @@ export const withdraw = async (req: AuthRequest, res: Response, next: NextFuncti
       description,
     } = req.body;
 
-    if (!amount || amount <= 0) {
-      res.status(400).json({ success: false, message: 'Amount must be greater than 0.' });
-      return;
-    }
+    const numAmount = Number(amount);
 
     const user = await User.findById(req.user!._id).select('+transaction_pin');
     if (!user || !user.is_verified) {
@@ -125,45 +147,54 @@ export const withdraw = async (req: AuthRequest, res: Response, next: NextFuncti
         res.status(400).json({ success: false, code: 'PIN_REQUIRED', message: 'Transaction PIN is required.' });
         return;
       }
-      if (transaction_pin !== user.transaction_pin) {
+      const pinMatch = await checkPin(String(transaction_pin), user.transaction_pin);
+      if (!pinMatch) {
         res.status(400).json({ success: false, code: 'INVALID_PIN', message: 'Invalid transaction PIN.' });
         return;
       }
     }
 
-    const account = await Account.findOne({ user_id: req.user!._id });
-    if (!account) {
-      res.status(404).json({ success: false, message: 'Account not found.' });
-      return;
-    }
-
-    if (account.balance < amount) {
-      res.status(400).json({ success: false, message: 'Insufficient balance.' });
-      return;
-    }
-
-    account.balance -= amount;
-    account.updated_at = new Date();
-    await account.save();
-
     const desc = description?.trim() || `External Transfer to ${recipient_name} (${bank_name})`;
+
+    // Atomic debit: only succeeds if balance >= amount
+    const account = await Account.findOneAndUpdate(
+      { user_id: req.user!._id, balance: { $gte: numAmount } },
+      { $inc: { balance: -numAmount }, $set: { updated_at: new Date() } },
+      { new: true },
+    );
+
+    if (!account) {
+      const exists = await Account.exists({ user_id: req.user!._id });
+      if (!exists) {
+        res.status(404).json({ success: false, message: 'Account not found.' });
+      } else {
+        res.status(400).json({ success: false, message: 'Insufficient balance.' });
+      }
+      return;
+    }
 
     const transaction = await Transaction.create({
       account_id: account._id,
       type: 'debit',
-      amount,
+      amount: numAmount,
       balance_after: account.balance,
       description: desc,
       metadata: { bank_name, recipient_account_number, recipient_name, routing_number, swift_code },
       created_by: req.user!._id,
     });
 
-    res.json({
+    const responseBody = {
       success: true,
       message: 'External transfer initiated successfully.',
       balance: account.balance,
       transaction,
-    });
+    };
+
+    if (idempotencyKey) {
+      ProcessedRequest.create({ key: `withdraw:${idempotencyKey}`, result: responseBody }).catch(() => {});
+    }
+
+    res.json(responseBody);
   } catch (error) {
     next(error);
   }
@@ -233,17 +264,33 @@ export const changePassword = async (req: AuthRequest, res: Response, next: Next
   }
 };
 
-// Transfer to another account
+// Transfer to another NileTrust account
 export const transfer = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const { recipient_id, amount, description, transaction_pin } = req.body;
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      res.status(400).json({ success: false, errors: errors.array() });
+      return;
+    }
 
-    if (!recipient_id || !amount || amount <= 0) {
+    // Idempotency: return cached result for duplicate requests
+    const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+    if (idempotencyKey) {
+      const existing = await ProcessedRequest.findOne({ key: `transfer:${idempotencyKey}` });
+      if (existing) {
+        res.json(existing.result);
+        return;
+      }
+    }
+
+    const { recipient_id, amount, description, transaction_pin } = req.body;
+    const numAmount = Number(amount);
+
+    if (!recipient_id || !numAmount || numAmount <= 0) {
       res.status(400).json({ success: false, message: 'Valid recipient and amount are required.' });
       return;
     }
 
-    // Verify sender
     const sender = await User.findById(req.user!._id).select('+transaction_pin');
     if (!sender || !sender.is_verified) {
       res.status(403).json({
@@ -259,23 +306,19 @@ export const transfer = async (req: AuthRequest, res: Response, next: NextFuncti
         res.status(400).json({ success: false, code: 'PIN_REQUIRED', message: 'Transaction PIN is required.' });
         return;
       }
-      if (transaction_pin !== sender.transaction_pin) {
+      const pinMatch = await checkPin(String(transaction_pin), sender.transaction_pin);
+      if (!pinMatch) {
         res.status(400).json({ success: false, code: 'INVALID_PIN', message: 'Invalid transaction PIN.' });
         return;
       }
     }
 
-    const senderAccount = await Account.findOne({ user_id: req.user!._id });
-    if (!senderAccount) {
-      res.status(404).json({ success: false, message: 'Sender account not found.' });
-      return;
-    }
+    // Resolve recipient before opening the transaction
+    let recipientAccount: any;
+    let recipientUser: any;
 
-    let recipientAccount;
-    let recipientUser;
-
-    if (recipient_id.includes('@')) {
-      recipientUser = await User.findOne({ email: recipient_id.toLowerCase().trim() });
+    if (String(recipient_id).includes('@')) {
+      recipientUser = await User.findOne({ email: String(recipient_id).toLowerCase().trim() });
       if (!recipientUser) {
         res.status(404).json({ success: false, message: 'Recipient not found.' });
         return;
@@ -284,8 +327,8 @@ export const transfer = async (req: AuthRequest, res: Response, next: NextFuncti
     } else {
       recipientAccount = await Account.findOne({ account_number: recipient_id });
       if (!recipientAccount) {
-         res.status(404).json({ success: false, message: 'Recipient account not found.' });
-         return;
+        res.status(404).json({ success: false, message: 'Recipient account not found.' });
+        return;
       }
       recipientUser = await User.findById(recipientAccount.user_id);
     }
@@ -295,68 +338,111 @@ export const transfer = async (req: AuthRequest, res: Response, next: NextFuncti
       return;
     }
 
-    if (senderAccount.account_number === recipientAccount.account_number) {
-      res.status(400).json({ success: false, message: 'Cannot transfer to your own account.' });
-      return;
-    }
-
     if (!recipientUser.is_active) {
       res.status(400).json({ success: false, message: 'Recipient account is not active.' });
       return;
     }
 
-    if (senderAccount.balance < amount) {
-      res.status(400).json({ success: false, message: 'Insufficient balance.' });
+    const senderAccountSnapshot = await Account.findOne({ user_id: req.user!._id });
+    if (!senderAccountSnapshot) {
+      res.status(404).json({ success: false, message: 'Sender account not found.' });
+      return;
+    }
+
+    if (senderAccountSnapshot.account_number === recipientAccount.account_number) {
+      res.status(400).json({ success: false, message: 'Cannot transfer to your own account.' });
       return;
     }
 
     const desc = description?.trim() || 'Transfer';
+    const senderAccountNumber = senderAccountSnapshot.account_number;
 
-    // Debit sender
-    senderAccount.balance -= amount;
-    senderAccount.updated_at = new Date();
-    await senderAccount.save();
+    let senderTxn: any;
+    let finalSenderBalance: number = 0;
 
-    // Credit recipient
-    recipientAccount.balance += amount;
-    recipientAccount.updated_at = new Date();
-    await recipientAccount.save();
-
-    const senderTxn = await Transaction.create({
-      account_id: senderAccount._id,
-      type: 'debit',
-      amount,
-      balance_after: senderAccount.balance,
-      description: `Transfer to ${recipientAccount.account_number} — ${desc}`,
-      created_by: req.user!._id,
-    });
-
-    await Transaction.create({
-      account_id: recipientAccount._id,
-      type: 'credit',
-      amount,
-      balance_after: recipientAccount.balance,
-      description: `Transfer from ${senderAccount.account_number} — ${desc}`,
-      created_by: req.user!._id,
-    });
-
+    const session = await mongoose.startSession();
     try {
-      await sendEmail({
-        email: recipientUser.email,
-        subject: 'NileTrust Bank - Funds Received',
-        message: `Hello ${recipientUser.full_name},\n\nYou have just received a transfer of ${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} from ${sender.full_name}.\n\nDescription: ${desc}\nYour new balance is: ${recipientAccount.balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}\n\nThank you for choosing NileTrust Bank!`,
+      await session.withTransaction(async () => {
+        // Atomic debit — only proceeds if sender has sufficient funds
+        const updatedSender = await Account.findOneAndUpdate(
+          { user_id: req.user!._id, balance: { $gte: numAmount } },
+          { $inc: { balance: -numAmount }, $set: { updated_at: new Date() } },
+          { new: true, session },
+        );
+        if (!updatedSender) throw new Error('INSUFFICIENT_BALANCE');
+
+        finalSenderBalance = updatedSender.balance;
+
+        // Atomic credit
+        const updatedRecipient = await Account.findOneAndUpdate(
+          { _id: recipientAccount._id },
+          { $inc: { balance: numAmount }, $set: { updated_at: new Date() } },
+          { new: true, session },
+        );
+        if (!updatedRecipient) throw new Error('RECIPIENT_ACCOUNT_ERROR');
+
+        const [debitTxn] = await Transaction.create(
+          [
+            {
+              account_id: updatedSender._id,
+              type: 'debit',
+              amount: numAmount,
+              balance_after: updatedSender.balance,
+              description: `Transfer to ${recipientAccount.account_number} — ${desc}`,
+              created_by: req.user!._id,
+            },
+          ],
+          { session },
+        );
+        senderTxn = debitTxn;
+
+        await Transaction.create(
+          [
+            {
+              account_id: recipientAccount._id,
+              type: 'credit',
+              amount: numAmount,
+              balance_after: updatedRecipient.balance,
+              description: `Transfer from ${senderAccountNumber} — ${desc}`,
+              created_by: req.user!._id,
+            },
+          ],
+          { session },
+        );
       });
-    } catch (err) {
-      console.error('Failed to send receipt email to recipient:', err);
+    } catch (err: any) {
+      if (err.message === 'INSUFFICIENT_BALANCE') {
+        res.status(400).json({ success: false, message: 'Insufficient balance.' });
+        return;
+      }
+      if (err.message === 'RECIPIENT_ACCOUNT_ERROR') {
+        res.status(400).json({ success: false, message: 'Recipient account error. Please try again.' });
+        return;
+      }
+      throw err;
+    } finally {
+      await session.endSession();
     }
 
-    res.json({
+    sendEmail({
+      email: recipientUser.email,
+      subject: 'NileTrust Bank - Funds Received',
+      message: `Hello ${recipientUser.full_name},\n\nYou have just received a transfer of ${numAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} from ${sender.full_name}.\n\nDescription: ${desc}\n\nThank you for choosing NileTrust Bank!`,
+    }).catch(err => console.error('Failed to send receipt email:', err));
+
+    const responseBody = {
       success: true,
       message: 'Transfer successful.',
-      balance: senderAccount.balance,
+      balance: finalSenderBalance,
       transaction: senderTxn,
       recipient_name: recipientUser.full_name,
-    });
+    };
+
+    if (idempotencyKey) {
+      ProcessedRequest.create({ key: `transfer:${idempotencyKey}`, result: responseBody }).catch(() => {});
+    }
+
+    res.json(responseBody);
   } catch (error) {
     next(error);
   }
@@ -390,11 +476,10 @@ export const lookupAccount = async (req: AuthRequest, res: Response, next: NextF
     }
 
     if (!account || !user) {
-       res.status(404).json({ success: false, message: 'Account not found.' });
-       return;
+      res.status(404).json({ success: false, message: 'Account not found.' });
+      return;
     }
 
-    // Return masked name for privacy
     const nameParts = user.full_name.split(' ');
     const maskedName = nameParts
       .map((part: string) => part[0] + '*'.repeat(Math.max(part.length - 1, 0)))

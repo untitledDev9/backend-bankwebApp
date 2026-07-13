@@ -7,3 +7,11 @@ export const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+export const transactionLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  message: { success: false, message: 'Too many transaction requests. Please wait a moment before trying again.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});

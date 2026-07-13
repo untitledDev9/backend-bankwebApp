@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import User, { IUser } from '../models/User';
+import RevokedToken from '../models/RevokedToken';
 
 export interface AuthRequest extends Request {
   user?: IUser;
@@ -16,7 +17,20 @@ const protect = async (req: AuthRequest, res: Response, next: NextFunction): Pro
       return;
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as { id: string; role: string };
+    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as {
+      id: string;
+      role: string;
+      jti?: string;
+    };
+
+    if (decoded.jti) {
+      const revoked = await RevokedToken.findOne({ jti: decoded.jti });
+      if (revoked) {
+        res.status(401).json({ success: false, message: 'Session has been revoked. Please log in again.' });
+        return;
+      }
+    }
+
     const user = await User.findById(decoded.id);
 
     if (!user) {

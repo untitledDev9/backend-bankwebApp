@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { body } from 'express-validator';
 import protect from '../middleware/protect';
+import { transactionLimiter } from '../middleware/rateLimiter';
 import * as ctrl from '../controllers/customerController';
 
 const router = Router();
@@ -11,6 +12,7 @@ router.get('/me', ctrl.getMe);
 router.get('/transactions', ctrl.getTransactions);
 router.post(
   '/withdraw',
+  transactionLimiter,
   [
     body('amount').isFloat({ gt: 0 }).withMessage('Amount must be a positive number'),
     body('bank_name').trim().notEmpty().withMessage('Bank name is required'),
@@ -44,6 +46,7 @@ router.post(
 
 router.post(
   '/transfer',
+  transactionLimiter,
   [
     body('recipient_id').trim().notEmpty().withMessage('Account number or email is required'),
     body('amount').isFloat({ gt: 0 }).withMessage('Amount must be positive'),
