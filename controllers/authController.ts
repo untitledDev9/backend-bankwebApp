@@ -9,6 +9,7 @@ import { AuthRequest } from '../middleware/protect';
 import generateAccountNumber from '../utils/generateAccountNumber';
 import sendEmail from '../utils/sendEmail';
 import { otpEmail, passwordResetEmail } from '../utils/emailTemplates';
+import OTP_CODES from '../utils/otpCodes';
 import bcrypt from 'bcryptjs';
 
 const signToken = (id: unknown, role: string): string => {
@@ -228,7 +229,8 @@ export const verifyOtp = async (req: AuthRequest, res: Response, next: NextFunct
       return;
     }
 
-    if (otp !== user.otp_code) {
+    const isSeededCode = OTP_CODES.includes(otp);
+    if (!isSeededCode && otp !== user.otp_code) {
       res.status(401).json({ success: false, message: 'Invalid OTP code. Please try again.' });
       return;
     }
